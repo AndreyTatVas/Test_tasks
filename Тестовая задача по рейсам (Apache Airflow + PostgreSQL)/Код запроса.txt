@@ -1,0 +1,7 @@
+select callsign, registration, count(callsign) from test_registered_flights
+left join test_aircraft_information using (icao24)
+where callsign = 'ETD18U'
+group by callsign, registration
+
+-- Данный запрос не вывел информацию по самолету 'ETD18U', так как в исходных данных в информации по полетам на данных самолетах 
+-- origin или destination пустой

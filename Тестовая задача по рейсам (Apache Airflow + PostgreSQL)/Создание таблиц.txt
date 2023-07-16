@@ -1,0 +1,82 @@
+-- Таблица для информации о рейсах
+create table if not exists test_flight_information (
+    callsign varchar not null,
+    number varchar,
+
+    constraint PK_callsign primary key (callsign)
+);
+
+-- Таблица для информации о самолетах
+create table if not exists test_aircraft_information (
+    icao24 varchar not null,
+    registration varchar,
+    typecode varchar,
+
+    constraint PK_icao24 primary key (icao24)
+);
+
+-- Таблица для информации по полетам
+create table if not exists test_registered_flights (
+    id integer not null,
+    callsign varchar not null references test_flight_information (callsign),
+    icao24 varchar not null references test_aircraft_information (icao24),
+    origin varchar not null,
+    destination varchar not null,
+    firstseen timestamp,
+    lastseen timestamp,
+    day timestamp not null,
+    latitude_1 varchar,
+    longitude_1 varchar,
+    altitude_1 varchar,
+    latitude_2 varchar,
+    longitude_2 varchar,
+    altitude_2 varchar,
+
+    constraint PK_id primary key (id)
+);
+
+-- Создаем последовательность
+create sequence test_registered_flights_id_seq;
+
+-- Добавляем последовательность в таблицу test_registered_flights для генерации столбца id
+alter table test_registered_flights
+    alter column id 
+        set default nextval ('test_registered_flights_id_seq');
+
+-- Создаем функцию для партицирования таблицы test_registered_flights по полю day
+create or replace function bigtable_test_registered_flights_trigger()
+returns trigger as $$
+declare
+  current_date_part date;
+  current_date_part_id text;
+  current_date_part_text text;
+  partition_table_name text;
+  first_day_of_month date;
+  last_day_of_month date;
+begin
+  current_date_part := cast(date_trunc('month', NEW.day) as date);
+  current_date_part_text := regexp_replace(current_date_part::text, '-','_','g');
+  partition_table_name := format('bigtable_test_registered_flights%s', current_date_part_text::text);
+  if (to_regclass(partition_table_name::text) isnull) then
+    first_day_of_month := current_date_part;
+    last_day_of_month := current_date_part + '1 month'::interval;
+    execute format(
+      'create table %I ('
+      '  check (day >= date %L and day < date %L)'
+      ') inherits (test_registered_flights);'
+      , partition_table_name, first_day_of_month, last_day_of_month);
+    execute format(
+      'alter table only %1$I add constraint %1$s__pkey primary key (id);'
+      , partition_table_name);
+  end if;
+  execute format('insert into %I values ($1.*)', partition_table_name) using NEW;
+
+  return null;
+end;
+$$
+language plpgsql;
+
+-- Привязываем функцию bigtable_test_registered_flights_trigger, как триггер на вставку к таблице test_registered_flights
+create trigger insert_bigtable_test_registered_flights    
+    before insert on test_registered_flights
+    for each row execute procedure bigtable_test_registered_flights_trigger();
